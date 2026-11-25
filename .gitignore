@@ -1,0 +1,6 @@
+.godot/
+/android/
+/build/
+*.keystore
+*.jks
+export_credentials.cfg
