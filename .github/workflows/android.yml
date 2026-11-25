@@ -1,0 +1,66 @@
+# Judo 3D (Godot 4, ce dépôt) : fabrique un APK de test et un AAB.
+# GitHub > Actions > « Judo 3D Android » > Run workflow, puis télécharger les fichiers en bas de la page du run.
+# Sans secrets, l'APK et l'AAB sont signés avec une clé de debug générée à la volée (test uniquement).
+# Pour le Play Store, ajouter les secrets JUDO3D_KEYSTORE_BASE64, JUDO3D_KEYSTORE_USER, JUDO3D_KEYSTORE_PASSWORD.
+
+name: Judo 3D Android
+
+on:
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: 4.7.2-stable
+
+jobs:
+  construire:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Godot et modèles d'export
+        run: |
+          curl -sL -o /tmp/godot.zip https://github.com/godotengine/godot/releases/download/$GODOT_VERSION/Godot_v${GODOT_VERSION}_linux.x86_64.zip
+          unzip -q /tmp/godot.zip -d /tmp/godot && mv /tmp/godot/Godot_v${GODOT_VERSION}_linux.x86_64 /tmp/godot/godot
+          curl -sL -o /tmp/tpl.tpz https://github.com/godotengine/godot/releases/download/$GODOT_VERSION/Godot_v${GODOT_VERSION}_export_templates.tpz
+          mkdir -p ~/.local/share/godot/export_templates
+          unzip -q /tmp/tpl.tpz -d /tmp/tpl && mv /tmp/tpl/templates ~/.local/share/godot/export_templates/${GODOT_VERSION/-/.}
+      - name: SDK Android et clé de signature
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "build-tools;35.0.1" "platforms;android-35" > /dev/null
+          if [ -n "${{ secrets.JUDO3D_KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.JUDO3D_KEYSTORE_BASE64 }}" | base64 -d > /tmp/release.keystore
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=${{ secrets.JUDO3D_KEYSTORE_USER }}" >> $GITHUB_ENV
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=${{ secrets.JUDO3D_KEYSTORE_PASSWORD }}" >> $GITHUB_ENV
+          else
+            keytool -genkeypair -keystore /tmp/release.keystore -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=androiddebugkey" >> $GITHUB_ENV
+            echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=android" >> $GITHUB_ENV
+          fi
+          echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=/tmp/release.keystore" >> $GITHUB_ENV
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=/tmp/release.keystore" >> $GITHUB_ENV
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> $GITHUB_ENV
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> $GITHUB_ENV
+          mkdir -p ~/.config/godot
+          printf '[gd_resource type="EditorSettings" format=3]\n\n[resource]\nexport/android/android_sdk_path = "%s"\nexport/android/java_sdk_path = "%s"\n' "$ANDROID_HOME" "$JAVA_HOME" > ~/.config/godot/editor_settings-4.7.tres
+      - name: Import du projet
+        run: /tmp/godot/godot --headless --path . --import || true
+      - name: APK et AAB
+        run: |
+          mkdir -p build
+          /tmp/godot/godot --headless --path . --export-release "Android APK" build/judo3d.apk
+          /tmp/godot/godot --headless --path . --install-android-build-template --export-release "Android AAB" build/judo3d.aab
+          ls -la build
+          test -s build/judo3d.apk && test -s build/judo3d.aab
+      - uses: actions/upload-artifact@v4
+        with:
+          name: judo3d-android
+          path: |
+            build/judo3d.apk
+            build/judo3d.aab
